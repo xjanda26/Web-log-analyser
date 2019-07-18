@@ -1,4 +1,4 @@
-# Web-log-analyzer
+# Web-log-analyser
 
 Použitie
   ./wana [Filter] [Príkaz] [Log [Log2[...]]]
