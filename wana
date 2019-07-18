@@ -1,0 +1,576 @@
+#!/bin/sh
+POSIXLY_CORRECT=yes
+
+#Author : Adam Janda, <xjanda26@stud.fit.vutbr.cz>
+
+#Project: Web log analyser
+
+#Name of script: wana.sh
+#The use: wana [filter] [command] [LOG[LOG2[...]]]
+
+#List of filters:
+# -a DATETIME       After DATETIME (not include current DATETIME)
+# -b DATETIME       Before DATETIME (not include current DATETIME)
+# -ip IPADDR        Data with source adress IPADDR (can be IPv4 or IPv6)
+# -uri URI          Data with source web address
+
+#List of commands:
+# list-ip           List of source IP addresses
+# list-hosts        List of source domain names
+# list-uri          List of URI
+# hist-ip           Query frequency histogram based on source IP addresses
+# hist-load         Histogram of overload
+
+#Return values
+# 0                 Success
+# 1                 Duplicated arguments
+# 2                 Wrong order of arguments
+# 3                 Wrong format of data needed by filters
+# 4                 Wrong format of IPv4 or IPv6
+# 5                 Used 2 commands in one time
+# 6                 Non-existent file
+
+#Flags
+fl_a=false
+fl_b=false
+fl_ip=false
+fl_uri=false
+
+fl_listIp=false
+fl_listHosts=false
+fl_listUri=false
+
+fl_histIp=false
+fl_histLoad=false
+
+fl_command=false
+fl_filter=false
+fl_file=false
+
+#Variables for save date time
+date_after=""
+date_before=""
+
+year=""
+month=""
+day=""
+hour=""
+minute=""
+second=""
+
+#Regular expressions
+regexDate='^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[1-2][0-9]|3[0-1]) (2[0-3]|[01][0-9]):[0-5][0-9](:[0-5][0-9])$'
+regexIPv4='^((25[0-5]|2[0-4][0-9]|[01]?[0-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9]?[0-9])$'
+regexIPv6='^(([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)|fe80:(:[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]{1,}|::(ffff(:0{1,4}){0,1}:){0,1}((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])|([0-9a-fA-F]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9]))$'
+#Variable to save 
+ip=""
+uri=""
+readed=""
+result=""
+
+#
+# Date format corventing function
+# Use: cut parts of variable date and save in correct form for later use
+# Parameters:
+#   $1      string of date
+#   $2      type of date
+
+# Value of types
+#   1       date after
+#   2       date before
+
+dateConvert(){
+    
+       year=$(echo "$1" | cut -d "-" -f 1)
+       month=$(echo "$1" | cut -d "-" -f 2)
+       day=$(echo "$1" | cut -d '-' -f 3 | cut -d ' ' -f 1)
+       hour=$(echo "$1" | cut -d ':' -f 1 | cut -d ' ' -f 2)
+       minute=$(echo "$1" | cut -d ':' -f 2)
+       second=$(echo "$1" | cut -d ':' -f 3)
+        if [ "$2" -eq "1" ]; then
+            date_after="$day$month$year$hour$minute$second"
+        elif [ "$2" -eq "2" ]; then
+            date_before="$day$month$year$hour$minute$second"
+        fi   
+}
+
+#Script without arguments copy STDIN to STDOUT
+if [ "$#" -eq "0" ]; then
+    awk "//" 2>/dev/null
+    exit 0
+fi
+
+#Script parsing
+while :; do
+    case $1 in
+        #Filters
+        -a)
+            if [ "$fl_a" = true  ]; then
+                printf 'Error! Duplicated argument -a.\n' >&2
+                exit 1
+            elif [ "$fl_command" = true ]; then
+                printf 'Error! Wrong order of arguments\n' >&2
+                exit 2
+            elif [ "$fl_file" = true ]; then
+                printf 'Error! Wrong order of arguments\n' >&2
+                exit 2
+            elif echo "$2" | grep -E "$regexDate" >/dev/null; then
+                    fl_a=true
+                    fl_filter=true
+                    date_after=$2
+                    dateConvert "$2" "1"
+                    shift
+            else 
+                printf 'Error! Date format is in wrong format.\n' >&2
+                exit 3
+            fi            
+            ;;
+        -b)
+            if [ "$fl_b" = true  ]; then
+                printf 'Error! Duplicated argument -b.\n' >&2
+                exit 1
+            elif [ "$fl_command" = true ]; then
+                printf 'Error! Wrong order of arguments.\n' >&2
+                exit 2
+            elif [ "$fl_file" = true ]; then
+                printf 'Error! Wrong order of arguments.\n' >&2
+                exit 2
+            elif echo "$2" | grep -E "$regexDate" >/dev/null; then
+                    fl_b=true
+                    fl_filter=true
+                    date_before=$2
+                    dateConvert "$2" "2"
+                    shift
+            else 
+                printf 'Error! Date format is in wrong format.\n' >&2
+                exit 3
+            fi
+            ;;
+        -ip)
+            if [ "$fl_ip" = true ]; then
+                printf 'Error! Duplicated argument -ip.\n' >&2
+                exit 1
+            elif [ "$fl_command" = true ]; then
+                printf 'Error! Wrong order of arguments.\n' >&2
+                exit 2
+            elif [ "$fl_file" = true ]; then
+                printf 'Error! Wrong order of arguments.\n' >&2
+                exit 2
+            elif nothing=$(echo "$2" | grep -E "$regexIPv4") ; then
+                ip="$2"
+                fl_ip=true
+                fl_filter=true
+                shift
+             elif nothing=$(echo "$2" | grep -E "$regexIPv6") ; then
+                
+                ip="$2"
+                
+                fl_ip=true
+                fl_filter=true
+                shift
+            else 
+                printf 'Error! IP address is in wrong format.\n' >&2
+                exit 4
+            fi
+            ;;
+
+        -uri)
+            if [ "$fl_uri" = true  ]; then
+                printf 'Error! Duplicated argument -uri.\n' >&2
+                exit 1
+            elif [ "$fl_command" = true ]; then
+                printf 'Error! Wrong order of arguments.\n' >&2
+                exit 2
+            elif [ "$fl_file" = true ]; then
+                printf 'Error! Wrong order of arguments.\n' >&2
+                exit 2
+            fi
+
+            fl_uri=true
+            fl_filter=true
+            uri=$2
+            shift
+            ;;
+        #Commands
+        list-ip)
+            if [ "$fl_listIp" = true ]; then
+                printf 'Error! Duplicated argument list-ip.\n' >&2
+                exit 2
+            elif [ "$fl_file" = true ]; then
+                printf 'Error! Wrong order of arguments.\n' >&2
+                exit 3
+            elif [ "$fl_command" = true ]; then
+                printf 'Error! Cannot use 2 commands.\n' >&2
+                exit 5
+            fi
+
+            fl_listIp=true
+            fl_command=true
+            ;;
+        list-hosts)
+            if [ "$fl_listHosts" = true ]; then
+                printf 'Error! Duplicated argument list-hosts.\n' >&2
+                exit 2
+            elif [ "$fl_file" = true ]; then
+                printf 'Error! Wrong order of arguments.\n' >&2
+                exit 3
+            elif [ "$fl_command" = true ]; then
+                printf 'Error! Cannot use 2 commands.\n' >&2
+                exit 5
+            fi
+
+            fl_listHosts=true
+            fl_command=true
+            ;;                                                      
+        list-uri)
+            if [ "$fl_listUri" = true ]; then
+                printf 'Error! Duplicated argument list-uri.\n' >&2
+                exit 2
+            elif [ "$fl_file" = true ]; then
+                printf 'Error! Wrong order of arguments.\n' >&2
+                exit 3
+            elif [ "$fl_command" = true ]; then
+                printf 'Error! Cannot use 2 commands.\n' >&2
+                exit 5
+            fi
+
+            fl_listUri=true
+            fl_command=true
+            ;;
+
+        hist-ip)
+            if [ "$fl_histIp" = true ]; then
+                printf 'Error! Duplicated argument hist-ip.\n' >&2
+                exit 2
+            elif [ "$fl_file" = true ]; then
+                printf 'Error! Wrong order of arguments.\n' >&2
+                exit 3
+            elif [ "$fl_command" = true ]; then
+                printf 'Error! Cannot use 2 commands.\n' >&2
+                exit 5
+            fi
+
+            fl_histIp=true
+            fl_command=true
+            ;;
+        hist-load)
+            if [ "$fl_histLoad" = true ]; then
+                printf 'Error! Duplicated argument hist-load.\n' >&2
+                exit 2
+            elif [ "$fl_file" = true ]; then
+                printf 'Error! Wrong order of arguments.\n' >&2
+                exit 3
+            elif [ "$fl_command" = true ]; then
+                printf 'Error! Cannot use 2 commands.\n' >&2
+                exit 5
+            fi
+
+            fl_histLoad=true
+            fl_command=true
+            ;;
+        *.gz)
+            if [ -f "$1" ]; then
+                readed=$(gunzip -c "$1" | awk '{ print }' 2>/dev/null)
+                result="$result$readed"
+                fl_file=true
+            else
+                printf 'Error! File does not exist.\n'
+                exit 6
+            fi
+            ;;
+        *.log*)
+            if [ -f "$1" ]; then
+                readed=$(awk '{ print }' "$1" 2>/dev/null)
+                result="$result$readed"
+                fl_file=true
+            else
+                printf 'Error! File does not exist.\n'
+                exit 6
+            fi
+            ;;
+        ?*)
+            echo "Error! Unknown command." >&2
+            exit 1
+            ;;
+        
+
+        *)
+            break
+    esac
+
+    shift
+done
+
+if [ "$fl_file" = false ]; then
+    result=$(</dev/stdin)
+fi #end of reading from STDIN
+
+if [ "$fl_filter" = true ];then
+    if [ "$fl_a" = true ];then
+        result=$(echo "$result" |  awk -v date="$date_after" '
+                                   {
+                                        dateString=$4
+                                       
+                                        gsub(/\//,"",dateString);
+                                        gsub(/:/,"",dateString);
+                                        gsub(/\[/,"",dateString);   
+                                        gsub ("Jan","01",dateString);
+                                        gsub ("Feb","02",dateString);
+                                        gsub ("Mar","03",dateString);
+                                        gsub ("Apr","04",dateString);
+                                        gsub ("May","05",dateString);
+                                        gsub ("Jun","06",dateString);
+                                        gsub ("Jul","07",dateString);
+                                        gsub ("Aug","08",dateString);
+                                        gsub ("Sep","09",dateString);
+                                        gsub ("Oct","10",dateString);
+                                        gsub ("Nov","11",dateString);
+                                        gsub ("Dec","12",dateString);
+
+                                        yearAf=date
+                                        yearSt=dateString
+
+                                        gsub (".{6}$","",yearAf)
+                                        gsub ("^.{4}","",yearAf)
+
+                                        gsub (".{6}$","",yearSt)
+                                        gsub ("^.{4}","",yearSt)                                        
+
+                                        monthAf=date
+                                        monthSt=dateString
+
+                                        gsub (".{10}$","",monthAf)
+                                        gsub ("^.{2}","",monthAf)
+
+                                        gsub (".{10}$","",monthSt)
+                                        gsub ("^.{2}","",monthSt)
+                                        
+
+                                        dayAf=date
+                                        daySt=dateString
+
+                                        gsub (".{12}$","",dayAf)
+
+                                        gsub (".{12}$","",daySt)
+                                        
+
+                                        hourAf=date
+                                        hourSt=dateString
+
+                                        gsub (".{4}$","",hourAf)
+                                        gsub ("^.{8}","",hourAf)
+
+                                        gsub (".{4}$","",hourSt)
+                                        gsub ("^.{8}","",hourSt)
+                                        
+
+                                        minAf=date
+                                        minSt=dateString
+
+                                        gsub (".{2}$","",minAf)
+                                        gsub ("^.{10}","",minAf)
+
+                                        gsub (".{2}$","",minSt)
+                                        gsub ("^.{10}","",minSt)
+                                        
+
+                                        secAf=date
+                                        secSt=dateString
+
+                                        gsub ("^.{12}","",secAf)
+
+                                        gsub ("^.{12}","",secSt)
+
+                                        newDate= yearAf monthAf dayAf hourAf minAf secAf
+                                        newDateSt= yearSt monthSt daySt hourSt minSt secSt
+
+                                        if (newDate < newDateSt) { print $0 }
+
+                                    }' 2>/dev/null)
+    fi #end of FLAG After
+    if [ "$fl_b" = true ];then
+        result=$(echo "$result" |  awk -v date="$date_before" '
+                                   {
+                                    dateString=$4
+
+                                        gsub(/\//,"",dateString);
+                                        gsub(/:/,"",dateString);
+                                        gsub(/\[/,"",dateString);   
+                                        gsub ("Jan","01",dateString);
+                                        gsub ("Feb","02",dateString);
+                                        gsub ("Mar","03",dateString);
+                                        gsub ("Apr","04",dateString);
+                                        gsub ("May","05",dateString);
+                                        gsub ("Jun","06",dateString);
+                                        gsub ("Jul","07",dateString);
+                                        gsub ("Aug","08",dateString);
+                                        gsub ("Sep","09",dateString);
+                                        gsub ("Oct","10",dateString);
+                                        gsub ("Nov","11",dateString);
+                                        gsub ("Dec","12",dateString);
+
+                                        yearAf=date
+                                        yearSt=dateString
+
+                                        gsub (".{6}$","",yearAf)
+                                        gsub ("^.{4}","",yearAf)
+
+                                        gsub (".{6}$","",yearSt)
+                                        gsub ("^.{4}","",yearSt)                                        
+
+                                        monthAf=date
+                                        monthSt=dateString
+
+                                        gsub (".{10}$","",monthAf)
+                                        gsub ("^.{2}","",monthAf)
+
+                                        gsub (".{10}$","",monthSt)
+                                        gsub ("^.{2}","",monthSt)
+                                        
+                                        dayAf=date
+                                        daySt=dateString
+
+                                        gsub (".{12}$","",dayAf)
+
+                                        gsub (".{12}$","",daySt)
+                                        
+                                        hourAf=date
+                                        hourSt=dateString
+
+                                        gsub (".{4}$","",hourAf)
+                                        gsub ("^.{8}","",hourAf)
+
+                                        gsub (".{4}$","",hourSt)
+                                        gsub ("^.{8}","",hourSt)
+                                        
+
+                                        minAf=date
+                                        minSt=dateString
+
+                                        gsub (".{2}$","",minAf)
+                                        gsub ("^.{10}","",minAf)
+
+                                        gsub (".{2}$","",minSt)
+                                        gsub ("^.{10}","",minSt)
+                                        
+                                        secAf=date
+                                        secSt=dateString
+
+                                        gsub ("^.{12}","",secAf)
+
+                                        gsub ("^.{12}","",secSt)
+
+                                        newDate= yearAf monthAf dayAf hourAf minAf secAf
+                                        newDateSt= yearSt monthSt daySt hourSt minSt secSt
+
+                                        if (newDate > newDateSt) { print $0 }
+     
+                                    }' 2>/dev/null)
+    fi #end of FLAG Before
+
+    if [ "$fl_ip" = true ]; then
+        result=$(echo "$result" | awk -v ipAWK="$ip" '  { if ($1 == ipAWK) print $0 }' 2>/dev/null)
+    fi #end of FLAG IP
+
+    if [ "$fl_uri" = true ]; then
+        result=$(echo "$result" | awk -v uriAWK="$uri" ' $7 ~ uriAWK { print $0 }' 2>/dev/null)
+    fi #end of FLAG uri
+fi #end of FLAG Filter
+
+if [ "$fl_command" = true ]; then
+    if [ "$fl_listIp" = true ]; then
+        result=$(echo "$result" | awk '{ print $1 }' 2>/dev/null | sort -u )
+    fi #end of FLAG list-ip
+
+    if [ "$fl_listHosts" = true ]; then
+        readed=""
+        result=$(echo "$result" | awk '{ print $1 }' 2>/dev/null  | sort -u )
+        for i in $result; do
+            host "$i" | grep "NXDOMAIN" >/dev/null
+            if [ $? -eq 1 ]; then
+                domain=$(host "$i" | awk '{ print $5 }' 2>/dev/null)
+            else
+                domain="$i"
+            fi
+            readed="$readed$domain "
+        done
+        result=$(echo "$readed" | awk '{                           
+                                    for(i = 1; i<= NF; i++){
+                                        print $i
+                                        }
+                                         printf "\n"
+                                    }' 2>/dev/null)
+    fi #end of FLAG List-Hosts
+
+    if [ "$fl_listUri" = true ]; then
+        result=$(echo "$result" | awk ' { 
+                                if ($6 == "\"GET" || $6 == "\"HEAD" || $6 == "\"POST"){
+                                    print $7
+                                     }
+                                }' 2>/dev/null | sort -u)
+    fi #end of FLAG List-uri
+
+    if [ "$fl_histIp" = true ]; then
+        if [ -n "$result" ]; then
+            result=$(echo "$result" | \
+                awk '
+                    function printHash (n){
+                        h=""
+                        for( i = 1; i <= n; i++){
+                            h = h "#"
+                        }
+                        return h
+                    }
+                                    
+                    { counter[$1]++ }
+                                    
+                    END{  
+                        for (x in counter){
+                            printf "%s (%d): %s\n", x, counter[x], printHash(counter[x])
+                        } 
+                    }' 2>/dev/null | sort -k2 -r)
+        fi #end of test empty
+    fi #end of FLAG hist-ip
+
+    if [ "$fl_histLoad" = true ]; then
+        if [ -n "$result" ]; then
+            result=$(echo "$result" | awk '{print $4 }' 2>/dev/null | \
+            awk -F '/' '{ print $3" ""-"$2"-"$1 }' 2>/dev/null | \
+            awk -F ':' '{ print $1" "$2":"$3" "$4 }' 2>/dev/null | \
+            awk -F ' ' '{ print $1 $4" "$2 $3 }' 2>/dev/null | \
+            awk  ' 
+                function printHash(n){
+                    h=""
+                    for (i = 1; i <= n; i++) { h= h "#" }
+                    return h
+                }
+
+                {
+                    gsub(/\[/,"",$1);
+                    gsub ("Jan","01",$1);
+                    gsub ("Feb","02",$1);
+                    gsub ("Mar","03",$1);
+                    gsub ("Apr","04",$1);
+                    gsub ("May","05",$1);
+                    gsub ("Jun","06",$1);
+                    gsub ("Jul","07",$1);
+                    gsub ("Aug","08",$1);
+                    gsub ("Sep","09",$1);
+                    gsub ("Oct","10",$1);
+                    gsub ("Nov","11",$1);
+                    gsub ("Dec","12",$1);
+                    gsub (".{4}$","00",$2);
+                
+                    counter[$0]++
+                }
+                END{  
+                    for (x in counter){ printf "%s (%d): %s\n", x, counter[x], printHash(counter[x])}
+                }' 2>/dev/null | \
+            sort -k1 )
+        fi #end of test not empty
+    fi #end of FLAG hist-load
+
+fi #end of FLAG command
+
+echo "$result"
+exit 0
